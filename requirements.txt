@@ -1,0 +1,2 @@
+trueforge-sdk>=0.2,<1
+python-dotenv>=1.0

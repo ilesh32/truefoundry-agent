@@ -1,0 +1,49 @@
+# Cloud Cost Janitor agent client for a TrueForge running on this machine.
+#
+#   docker compose run --rm register        # once, and after changing the spec/token
+#   docker compose run --rm check           # smoke test
+#   docker compose run --rm chat            # interactive (approvals are asked in your terminal)
+#   docker compose run --rm chat --fresh "What do I have?"
+#
+# Config comes from the shell or .env (see .env.example). The MCP token is read from the sibling
+# mcp-s2sep project as a mounted secret unless MCP_AUTH_TOKEN is set.
+
+x-agent: &agent
+  build: .
+  image: cloud-cost-janitor-agent
+  # Values come from the shell or ./.env (compose reads it automatically for ${...}).
+  environment:
+    # Inside Docker, the TrueForge on your laptop is host.docker.internal:8791 (compose maps 8790 -> 8791).
+    TRUEFORGE_BASE_URL: ${TRUEFORGE_BASE_URL:-http://host.docker.internal:8791}
+    # Resolved by the TrueForge *server* container, not this one.
+    MCP_URL: ${MCP_URL:-http://host.docker.internal:8000/mcp}
+    AWS_REGION: ${AWS_REGION:-ap-southeast-2}
+    AGENT_MODEL: ${AGENT_MODEL:-test/vm-polaris-openai}
+    FRESH_SESSION_PER_MESSAGE: ${FRESH_SESSION_PER_MESSAGE:-false}
+    TRUEFORGE_TOKEN: ${TRUEFORGE_TOKEN:-}
+    MCP_AUTH_TOKEN_FILE: /run/secrets/mcp_token
+  secrets:
+    - mcp_token
+  extra_hosts:
+    - "host.docker.internal:host-gateway"   # needed on Linux; harmless on Docker Desktop
+
+services:
+  register:
+    <<: *agent
+    command: ["register"]
+
+  check:
+    <<: *agent
+    command: ["check"]
+
+  chat:
+    <<: *agent
+    # entrypoint (not command) so `docker compose run chat "message"` appends to it
+    entrypoint: ["python", "-m", "janitor_agent", "chat"]
+    command: []
+    stdin_open: true
+    tty: true
+
+secrets:
+  mcp_token:
+    file: ${MCP_TOKEN_FILE:-../mcp-s2sep/.mcp_token}
