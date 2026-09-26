@@ -18,6 +18,62 @@ from janitor_agent import config
 RESULT_PREVIEW_CHARS = 1500
 
 
+class CostBook:
+    """Remembers what analyze_infrastructure said each flagged resource costs, straight from
+    the tool output (never from the model), so the approval prompt can show what a delete
+    would save. Estimates come from the MCP server's PRICING.md rates."""
+
+    CATEGORIES = ("orphaned_volumes", "idle_instances", "running_instances", "idle_load_balancers")
+
+    def __init__(self) -> None:
+        self.items: dict[str, dict] = {}
+
+    def learn(self, tool_output: str) -> None:
+        try:
+            data = json.loads(tool_output)
+        except (TypeError, json.JSONDecodeError):
+            return
+        if not isinstance(data, dict):
+            return
+        for category in self.CATEGORIES:
+            for item in data.get(category) or []:
+                rid = item.get("id") or item.get("arn")
+                if rid:
+                    self.items[rid] = {
+                        "kind": category,
+                        "name": item.get("name") or (item.get("tags") or {}).get("Name") or "",
+                        "cost": item.get("estimated_monthly_cost_usd"),
+                        "complete": bool(item.get("cost_complete")),
+                    }
+
+    def describe(self, resource_ids: list[str]) -> list[str]:
+        lines, total, complete = [], 0.0, True
+        for rid in resource_ids:
+            info = self.items.get(rid)
+            if info is None:
+                lines.append(f"  {rid}: cost unknown (not seen in a scan this session)")
+                complete = False
+                continue
+            cost = info["cost"]
+            if cost is None:
+                lines.append(f"  {rid} {info['name']}: not priced (no rate)")
+            else:
+                mark = "" if info["complete"] else " + unpriced parts"
+                lines.append(f"  {rid} {info['name']}: ${cost:,.2f}/month{mark}")
+                total += cost
+            complete = complete and info["complete"]
+        lines.append(f"  Estimated monthly savings: ${total:,.2f}" + ("" if complete else " (at least; some costs not priced)"))
+        lines.append("  (estimate from PRICING.md us-east-1 list-price rates, not live AWS billing)")
+        return lines
+
+    def savings_line(self, teardown_output: str) -> str | None:
+        try:
+            deleted = [d["id"] for d in json.loads(teardown_output).get("deleted", [])]
+        except (TypeError, ValueError, AttributeError, KeyError):
+            return None
+        return "\n".join(self.describe(deleted)) if deleted else None
+
+
 @dataclass
 class PendingCall:
     thread_id: str
@@ -48,7 +104,7 @@ def resolve_pending(pending_events, events) -> list[PendingCall]:
     return calls
 
 
-def stream_turn(client, session_id: str, items: list[dict], out=sys.stdout) -> TurnResult:
+def stream_turn(client, session_id: str, items: list[dict], out=sys.stdout, costs: CostBook | None = None) -> TurnResult:
     events: dict = {}
     approvals, questions = [], []
     result = TurnResult()
@@ -71,6 +127,10 @@ def stream_turn(client, session_id: str, items: list[dict], out=sys.stdout) -> T
         elif event.type == "tool.response":
             preview = event.content if len(event.content) <= RESULT_PREVIEW_CHARS else event.content[:RESULT_PREVIEW_CHARS] + " …"
             print(f"  ← {preview}", file=out)
+            if costs is not None:
+                costs.learn(event.content)
+                if (saved := costs.savings_line(event.content)) is not None:
+                    print(f"\n  Freed by this teardown:\n{saved}", file=out)
         elif event.type == "tool.approval_required":
             approvals.append(event)
         elif event.type == "tool.response_required":
@@ -88,7 +148,7 @@ def stream_turn(client, session_id: str, items: list[dict], out=sys.stdout) -> T
     return result
 
 
-def ask_approval(call: PendingCall, input_fn=input, out=sys.stdout) -> dict:
+def ask_approval(call: PendingCall, input_fn=input, out=sys.stdout, costs: CostBook | None = None) -> dict:
     print(f"\n=== APPROVAL REQUIRED: {call.name} ===", file=out)
     try:
         print(json.dumps(json.loads(call.arguments), indent=2), file=out)
@@ -96,6 +156,13 @@ def ask_approval(call: PendingCall, input_fn=input, out=sys.stdout) -> dict:
         print(call.arguments, file=out)
     if call.name == "execute_teardown":
         print("This PERMANENTLY deletes the listed AWS resources.", file=out)
+        if costs is not None:
+            try:
+                ids = json.loads(call.arguments).get("resource_ids", [])
+            except (json.JSONDecodeError, AttributeError):
+                ids = []
+            print("What deleting these would save:", file=out)
+            print("\n".join(costs.describe(ids)), file=out)
     try:
         answer = input_fn("Approve? [y/N] ").strip().lower()
     except EOFError:  # no terminal (e.g. docker run without -t): nobody can approve, so deny
@@ -113,18 +180,22 @@ def ask_question(call: PendingCall, input_fn=input, out=sys.stdout) -> dict:
     return {"type": "user.tool_response", "thread_id": call.thread_id, "tool_call_id": call.tool_call_id, "content": input_fn("> ")}
 
 
-def converse(client, session_id: str, message: str, input_fn=input, out=sys.stdout) -> TurnResult:
-    """Send one user message, then keep resuming the turn for as long as the agent
-    is paused waiting on an approval or an answer."""
-    items = [{"type": "user.message", "content": message}]
+def settle(client, session_id: str, items: list[dict], input_fn=input, out=sys.stdout, costs: CostBook | None = None) -> TurnResult:
+    """Run a turn with `items`, then keep resuming it for as long as the agent is paused
+    waiting on an approval or an answer from you."""
     while True:
-        result = stream_turn(client, session_id, items, out)
+        result = stream_turn(client, session_id, items, out, costs)
         if result.error:
             print(f"\n[turn error] {result.error}", file=out)
-        items = [ask_approval(c, input_fn, out) for c in result.approvals] + \
+        items = [ask_approval(c, input_fn, out, costs) for c in result.approvals] + \
                 [ask_question(c, input_fn, out) for c in result.questions]
         if not items:
             return result
+
+
+def converse(client, session_id: str, message: str, input_fn=input, out=sys.stdout, costs: CostBook | None = None) -> TurnResult:
+    """Send one user message, then settle any approvals/questions it triggers."""
+    return settle(client, session_id, [{"type": "user.message", "content": message}], input_fn, out, costs)
 
 
 def open_session(client) -> str:
@@ -136,11 +207,12 @@ def main() -> None:
     fresh = config.FRESH_SESSION_PER_MESSAGE or "--fresh" in sys.argv[1:]
     client = config.make_client()
     session_id = open_session(client)
+    costs = CostBook()
     mode = "new session per message (always fresh)" if fresh else "one session (agent re-queries by instruction)"
     print(f"session {session_id} on agent {config.AGENT_NAME!r} ({config.BASE_URL}); {mode}")
 
     if args:
-        converse(client, session_id, " ".join(args))
+        converse(client, session_id, " ".join(args), costs=costs)
         return
     print("Type a message (Ctrl-D or 'exit' to quit).")
     first = True
@@ -156,8 +228,9 @@ def main() -> None:
             continue
         if fresh and not first:
             session_id = open_session(client)
+            costs = CostBook()
         first = False
-        converse(client, session_id, message)
+        converse(client, session_id, message, costs=costs)
 
 
 if __name__ == "__main__":

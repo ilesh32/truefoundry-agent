@@ -19,6 +19,7 @@ x-agent: &agent
     MCP_URL: ${MCP_URL:-http://host.docker.internal:8000/mcp}
     AWS_REGION: ${AWS_REGION:-ap-southeast-2}
     AGENT_MODEL: ${AGENT_MODEL:-test/vm-polaris-openai}
+    SCHEDULE_TIMEZONE: ${SCHEDULE_TIMEZONE:-UTC}
     FRESH_SESSION_PER_MESSAGE: ${FRESH_SESSION_PER_MESSAGE:-false}
     TRUEFORGE_TOKEN: ${TRUEFORGE_TOKEN:-}
     MCP_AUTH_TOKEN_FILE: /run/secrets/mcp_token
@@ -41,6 +42,16 @@ services:
     # entrypoint (not command) so `docker compose run chat "message"` appends to it
     entrypoint: ["python", "-m", "janitor_agent", "chat"]
     command: []
+    stdin_open: true
+    tty: true
+
+  # Everything else: schedule / pending / review / register / check, e.g.
+  #   docker compose run --rm janitor schedule create --cron "0 9 * * *" --timezone Asia/Kolkata
+  #   docker compose run --rm janitor pending
+  #   docker compose run --rm janitor review
+  janitor:
+    <<: *agent
+    command: ["--help"]
     stdin_open: true
     tty: true
 

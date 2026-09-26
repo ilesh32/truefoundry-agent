@@ -3,6 +3,9 @@
     python -m janitor_agent register        # register MCP server + agent in TrueForge (idempotent)
     python -m janitor_agent check           # smoke test: TrueForge up, agent registered, MCP tools reachable
     python -m janitor_agent chat [--fresh] [message...]
+    python -m janitor_agent schedule create|list|run-now|pause|resume|delete [--name N] ...
+    python -m janitor_agent pending         # scheduled runs waiting for your approval
+    python -m janitor_agent review [SESSION_ID]
 """
 import sys
 
@@ -29,6 +32,8 @@ def check() -> int:
 
 
 def main() -> int:
+    from janitor_agent import config
+
     command, rest = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ("", [])
     if command == "register":
         from janitor_agent import register
@@ -41,6 +46,18 @@ def main() -> int:
 
         sys.argv = [sys.argv[0], *rest]
         chat.main()
+    elif command == "schedule":
+        from janitor_agent import schedule
+
+        return schedule.main(rest)
+    elif command in ("pending", "review"):
+        from janitor_agent import schedule
+
+        client = config.make_client()
+        if command == "pending":
+            schedule.show_pending(client)
+            return 0
+        return schedule.review(client, rest[0] if rest else None)
     else:
         print(USAGE)
         return 2

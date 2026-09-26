@@ -1,5 +1,6 @@
 """Offline tests: the agent spec, and the approval/pause handling in chat.py."""
 import io
+import json
 from types import SimpleNamespace as NS
 
 from janitor_agent import chat, config, spec
@@ -63,7 +64,7 @@ def test_approval_prompt_shows_the_arguments_and_warns_about_deletion():
 def test_converse_resumes_the_turn_with_the_users_decision(monkeypatch):
     turns = []
 
-    def fake_stream_turn(client, session_id, items, out):
+    def fake_stream_turn(client, session_id, items, out, costs=None):
         turns.append(items)
         if len(turns) == 1:
             return chat.TurnResult(status="done", approvals=[_call()])
@@ -103,3 +104,68 @@ def test_mcp_token_can_come_from_a_mounted_secret_file(tmp_path, monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(config)
+
+
+SCAN = json.dumps({
+    "orphaned_volumes": [{"id": "vol-1", "estimated_monthly_cost_usd": 8.0, "cost_complete": True, "tags": {"Name": "old-data"}}],
+    "idle_instances": [{"id": "i-1", "estimated_monthly_cost_usd": 0.8, "cost_complete": True, "tags": {}}],
+    "running_instances": [{"id": "i-2", "estimated_monthly_cost_usd": 0.8, "cost_complete": False, "tags": {"Name": "web"}}],
+    "idle_load_balancers": [{"arn": "arn:aws:elasticloadbalancing:x", "name": "lb", "estimated_monthly_cost_usd": 16.2, "cost_complete": True}],
+})
+
+
+def test_costbook_reads_costs_from_scan_output_and_totals_the_selection():
+    book = chat.CostBook()
+    book.learn(SCAN)
+    text = "\n".join(book.describe(["vol-1", "arn:aws:elasticloadbalancing:x"]))
+    assert "$8.00/month" in text and "$16.20/month" in text
+    assert "Estimated monthly savings: $24.20" in text and "at least" not in text
+    assert "PRICING.md" in text
+
+
+def test_costbook_marks_incomplete_and_unknown_costs_instead_of_guessing():
+    book = chat.CostBook()
+    book.learn(SCAN)
+    text = "\n".join(book.describe(["i-2", "vol-unknown"]))
+    assert "unpriced parts" in text and "cost unknown" in text
+    assert "(at least; some costs not priced)" in text
+
+
+def test_costbook_ignores_non_scan_output():
+    book = chat.CostBook()
+    for junk in ("not json", "[1, 2]", '{"error": "x"}', None):
+        book.learn(junk)
+    assert book.items == {}
+
+
+def test_approval_prompt_shows_what_the_delete_would_save_before_asking():
+    book = chat.CostBook()
+    book.learn(SCAN)
+    out = io.StringIO()
+    on_screen_when_asked = []
+
+    def answer(_prompt):
+        on_screen_when_asked.append(out.getvalue())  # what the user can see at the moment of the question
+        return "n"
+
+    call = chat.PendingCall("main", "c1", "execute_teardown", json.dumps({"resource_ids": ["vol-1", "i-1"]}))
+    chat.ask_approval(call, input_fn=answer, out=out, costs=book)
+
+    shown = on_screen_when_asked[0]
+    assert "What deleting these would save" in shown
+    assert "$8.00/month" in shown and "$0.80/month" in shown and "Estimated monthly savings: $8.80" in shown
+
+
+def test_teardown_result_reports_the_savings_of_what_was_actually_deleted():
+    book = chat.CostBook()
+    book.learn(SCAN)
+    result = json.dumps({"deleted": [{"id": "vol-1", "type": "volume"}], "skipped": [{"id": "i-1", "reason": "x"}], "failed": []})
+    text = book.savings_line(result)
+    assert "vol-1" in text and "Estimated monthly savings: $8.00" in text and "i-1" not in text
+    assert book.savings_line(json.dumps({"deleted": []})) is None
+
+
+def test_instructions_require_using_tool_costs_never_model_arithmetic():
+    text = spec.instructions()
+    assert "NEVER" in text and "estimated_monthly_cost_usd" in text
+    assert "Before you ask the user to confirm a deletion" in text
