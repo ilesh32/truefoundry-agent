@@ -169,3 +169,57 @@ def test_instructions_require_using_tool_costs_never_model_arithmetic():
     text = spec.instructions()
     assert "NEVER" in text and "estimated_monthly_cost_usd" in text
     assert "Before you ask the user to confirm a deletion" in text
+
+
+def _server_names(manifest):
+    return [m["name"] for m in manifest["mcp_servers"]]
+
+
+def test_local_docker_sandbox_is_attached_and_trueforges_cloud_sandbox_stays_off(monkeypatch):
+    monkeypatch.setattr(config, "USE_SANDBOX", True)
+    text, manifest = spec.instructions(), spec.manifest()
+    assert manifest["config"]["sandbox"] == {"enabled": False}  # never Daytona
+    server = next(m for m in manifest["mcp_servers"] if m["name"] == config.SANDBOX_MCP_NAME)
+    assert server["enable_tools"] == ["run_python"] and server["require_approval_for_tools"] == []
+    assert "run_python" in text and "NEVER do cost arithmetic in your head" in text
+    assert "Cross-check" in text and "cost_summary" in text  # server numbers are a check, not the source
+
+
+def test_the_sandbox_server_can_never_run_teardown_and_teardown_stays_gated(monkeypatch):
+    monkeypatch.setattr(config, "USE_SANDBOX", True)
+    servers = {m["name"]: m for m in spec.manifest()["mcp_servers"]}
+    assert servers[config.MCP_SERVER_NAME]["require_approval_for_tools"] == ["execute_teardown"]
+    assert servers[config.SANDBOX_MCP_NAME]["enable_tools"] == ["run_python"]
+
+
+def test_pricing_file_is_given_to_the_agent_as_context():
+    text = spec.instructions()
+    for rate in ("$0.08 / GB-month", "$0.10 / GB-month", "$0.125 / GB-month", "$16.20 / month"):
+        assert rate in text
+    assert "context, not a tool" in text
+
+
+def test_without_the_sandbox_the_agent_only_quotes_the_servers_numbers(monkeypatch):
+    monkeypatch.setattr(config, "USE_SANDBOX", False)
+    text, manifest = spec.instructions(), spec.manifest()
+    assert _server_names(manifest) == [config.MCP_SERVER_NAME]
+    assert "run_python" not in text and "NEVER calculate, adjust or invent costs" in text
+
+
+def test_rates_match_the_mcp_servers_price_table():
+    """Keeps the agent's PRICING.md in step with mcp-s2sep (skipped where the sibling isn't present)."""
+    import pytest
+
+    sibling = config.MCP_PROJECT / "mcp_server" / "pricing.py"
+    if not sibling.is_file():
+        pytest.skip("mcp-s2sep not alongside")
+    ns = {}
+    exec(sibling.read_text(), ns)
+    text = (config.ROOT / "janitor_agent" / "PRICING.md").read_text()
+    import re
+
+    import re
+
+    for vtype, rate in ns["EBS_USD_PER_GB_MONTH"].items():
+        assert float(re.search(rf"EBS {vtype} \| \$([\d.]+)", text).group(1)) == rate
+    assert float(re.search(r"Load Balancer[^|]*\| ~\$([\d.]+)", text).group(1)) == ns["ALB_IDLE_USD_PER_MONTH"]

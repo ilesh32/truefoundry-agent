@@ -19,11 +19,15 @@ x-agent: &agent
     MCP_URL: ${MCP_URL:-http://host.docker.internal:8000/mcp}
     AWS_REGION: ${AWS_REGION:-ap-southeast-2}
     AGENT_MODEL: ${AGENT_MODEL:-test/vm-polaris-openai}
+    USE_SANDBOX: ${USE_SANDBOX:-true}
     FRESH_SESSION_PER_MESSAGE: ${FRESH_SESSION_PER_MESSAGE:-false}
     TRUEFORGE_TOKEN: ${TRUEFORGE_TOKEN:-}
     MCP_AUTH_TOKEN_FILE: /run/secrets/mcp_token
+    SANDBOX_MCP_URL: ${SANDBOX_MCP_URL:-http://host.docker.internal:8100/mcp}
+    SANDBOX_MCP_TOKEN_FILE: /run/secrets/sandbox_token
   secrets:
     - mcp_token
+    - sandbox_token
   extra_hosts:
     - "host.docker.internal:host-gateway"   # needed on Linux; harmless on Docker Desktop
 
@@ -47,3 +51,5 @@ services:
 secrets:
   mcp_token:
     file: ${MCP_TOKEN_FILE:-../mcp-s2sep/.mcp_token}
+  sandbox_token:
+    file: ${SANDBOX_TOKEN_FILE:-../sandbox-mcp/.token}

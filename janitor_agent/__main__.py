@@ -25,6 +25,12 @@ def check() -> int:
         print(f"FAIL MCP server is missing tools: {sorted(missing)}")
         return 1
     print(f"OK   MCP server {config.MCP_SERVER_NAME!r} reachable by TrueForge; tools: {sorted(tools)}")
+    if config.USE_SANDBOX:
+        sandbox_tools = {t["name"] for t in client.mcp_servers.list_tools(name=config.SANDBOX_MCP_NAME).data}
+        if "run_python" not in sandbox_tools:
+            print(f"FAIL sandbox MCP server {config.SANDBOX_MCP_NAME!r} has no run_python tool")
+            return 1
+        print(f"OK   sandbox MCP server {config.SANDBOX_MCP_NAME!r} reachable by TrueForge; tools: {sorted(sandbox_tools)}")
     return 0
 
 

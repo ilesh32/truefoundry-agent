@@ -103,6 +103,32 @@ for event in client.sessions.create_turn_stream(
     print(event)
 ```
 
+## Cost calculation in a local Docker sandbox
+
+The agent doesn't do arithmetic itself. It gets your pricing table
+(`janitor_agent/PRICING.md`) **as context, not a tool**, writes a small Python
+script, and runs it with the `run_python` tool of the local sandbox server
+(`../sandbox-mcp`): a fresh Docker container per call, no network, read-only,
+non-root, resource-limited, deleted afterwards. Nothing leaves your machine and
+TrueForge's own (Daytona) sandbox stays off.
+
+```bash
+../sandbox-mcp/scripts/run.sh start     # once; serves http://127.0.0.1:8100/mcp
+python -m janitor_agent register        # attaches it to TrueForge as `cost-sandbox-mcp`, then the agent
+python -m janitor_agent check           # verifies TrueForge can reach both MCP servers
+```
+
+- **Cross-check:** the AWS MCP server still returns its own `cost_summary`
+  (same rates, computed in code); the agent compares it with its script's total
+  and reports both if they differ. The approval prompt's savings panel also
+  uses the server's numbers, so it appears even if the model skips the script.
+- **Unpriced parts** (other EBS types, non-application load balancers, compute
+  of running instances) are printed as unpriced and left out of the total.
+- **Turn it off:** `USE_SANDBOX=false` (then re-run `register`) makes the agent
+  quote only the MCP server's numbers and detaches the sandbox server.
+- **Docker:** the containerised agent reads the sandbox token from
+  `../sandbox-mcp/.token` (secret mount) and reaches it at `SANDBOX_MCP_URL`.
+
 ## Cost estimates
 
 Costs come from the MCP server's price table (`../mcp-s2sep/PRICING.md`:

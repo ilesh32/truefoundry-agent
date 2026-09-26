@@ -12,6 +12,7 @@ load_dotenv(ROOT / ".env")
 
 AGENT_NAME = "cloud-cost-janitor"
 MCP_SERVER_NAME = "cloud-cost-janitor-mcp"
+SANDBOX_MCP_NAME = "cost-sandbox-mcp"
 
 
 def _from_mcp_project(filename: str, key: str | None = None) -> str | None:
@@ -32,6 +33,11 @@ BASE_URL = os.environ.get("TRUEFORGE_BASE_URL", "http://localhost:8791")
 TOKEN = os.environ.get("TRUEFORGE_TOKEN") or None
 MODEL = os.environ.get("AGENT_MODEL", "test/vm-polaris-openai")
 
+# Compute costs by having the agent write and run a script in the LOCAL Docker sandbox (the
+# sibling ../sandbox-mcp server; TrueForge's own cloud sandbox stays off). Off: the agent only
+# quotes the MCP server's numbers.
+USE_SANDBOX = os.environ.get("USE_SANDBOX", "true").lower() in ("1", "true", "yes")
+
 # Strict freshness: open a brand-new session for every message, so the model has no earlier
 # tool output in its context and MUST call the MCP server. Trade-off: no follow-ups across messages.
 FRESH_SESSION_PER_MESSAGE = os.environ.get("FRESH_SESSION_PER_MESSAGE", "").lower() in ("1", "true", "yes")
@@ -49,6 +55,12 @@ MCP_AUTH_TOKEN = (
     os.environ.get("MCP_AUTH_TOKEN")
     or _read_file(os.environ.get("MCP_AUTH_TOKEN_FILE"))
     or _from_mcp_project(".mcp_token")
+)
+SANDBOX_MCP_URL = os.environ.get("SANDBOX_MCP_URL", "http://host.docker.internal:8100/mcp")
+SANDBOX_MCP_TOKEN = (
+    os.environ.get("SANDBOX_MCP_TOKEN")
+    or _read_file(os.environ.get("SANDBOX_MCP_TOKEN_FILE"))
+    or _read_file(str(ROOT.parent / "sandbox-mcp" / ".token"))
 )
 AWS_REGION = os.environ.get("AWS_REGION") or _from_mcp_project(".env", "AWS_REGION") or "us-east-1"
 

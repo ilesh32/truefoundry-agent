@@ -24,6 +24,24 @@ def register_mcp_server(client) -> None:
     )
 
 
+def register_sandbox_server(client) -> None:
+    """Attach the local Docker sandbox (../sandbox-mcp) as a second MCP server."""
+    if not config.SANDBOX_MCP_TOKEN:
+        sys.exit("No sandbox token: run sandbox-mcp/scripts/run.sh start, set SANDBOX_MCP_TOKEN, or set USE_SANDBOX=false")
+    client.settings.mcp_servers.create_or_update(
+        manifest=RemoteMcpServerManifest(
+            name=config.SANDBOX_MCP_NAME,
+            url=config.SANDBOX_MCP_URL,
+            description="Disposable local Docker sandbox that runs Python (stdlib only, no network) for calculations.",
+            auth=McpServerHeaderAuth(headers={"Authorization": f"Bearer {config.SANDBOX_MCP_TOKEN}"}),
+        )
+    )
+    tools = [t["name"] for t in client.mcp_servers.list_tools(name=config.SANDBOX_MCP_NAME).data]
+    if "run_python" not in tools:
+        sys.exit(f"sandbox MCP server is registered but has no run_python tool (found {tools})")
+    print(f"registered sandbox MCP server {config.SANDBOX_MCP_NAME!r} -> {config.SANDBOX_MCP_URL}; tools: {tools}")
+
+
 def register_agent(client) -> str:
     existing = next((a for a in client.agents.list(agent_name=config.AGENT_NAME) if a.name == config.AGENT_NAME), None)
     if existing is not None:
@@ -47,6 +65,8 @@ def main() -> None:
     if missing:
         sys.exit(f"MCP server is registered but these tools are missing: {sorted(missing)}")
 
+    if config.USE_SANDBOX:
+        register_sandbox_server(client)
     agent_id = register_agent(client)
     print(f"registered agent {config.AGENT_NAME!r} (id {agent_id}), model {config.MODEL}")
     print(f"approval required for: {spec.APPROVAL_REQUIRED_TOOLS}")
