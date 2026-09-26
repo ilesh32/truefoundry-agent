@@ -11,7 +11,6 @@ MCP_PROJECT = ROOT.parent / "mcp-s2sep"
 load_dotenv(ROOT / ".env")
 
 AGENT_NAME = "cloud-cost-janitor"
-SCHEDULED_AGENT_NAME = "cloud-cost-janitor-scheduled"
 MCP_SERVER_NAME = "cloud-cost-janitor-mcp"
 
 
@@ -27,8 +26,6 @@ def _from_mcp_project(filename: str, key: str | None = None) -> str | None:
             return line.split("=", 1)[1].strip() or None
     return None
 
-
-SCHEDULE_TIMEZONE = os.environ.get("SCHEDULE_TIMEZONE", "UTC")  # IANA name, e.g. Asia/Kolkata
 
 # The compose file maps the container's 8790 to host port 8791.
 BASE_URL = os.environ.get("TRUEFORGE_BASE_URL", "http://localhost:8791")

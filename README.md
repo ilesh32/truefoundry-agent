@@ -26,8 +26,6 @@ only holds the agent **definition** and two small clients:
 | `janitor_agent/register.py` | Idempotently registers the MCP server as a TrueForge connector (with its bearer token) and creates/updates the agent. |
 | `janitor_agent/chat.py` | Terminal chat: streams replies, shows tool calls/results, and **pauses for your approval** on gated tools. |
 | `janitor_agent/__main__.py` | Single entrypoint (`register` / `check` / `chat`), used by the Docker image. |
-| `janitor_agent/scheduled_spec.py` | The second agent: unattended scan, cost report, teardown proposal that waits for approval. |
-| `janitor_agent/schedule.py` | `schedule ...`, `pending` and `review` commands. |
 | `janitor_agent/config.py` | Settings from env / `.env`; defaults follow `../mcp-s2sep`. |
 
 ## Quick start
@@ -105,38 +103,6 @@ for event in client.sessions.create_turn_stream(
     print(event)
 ```
 
-## Scheduled scans (second agent)
-
-`cloud-cost-janitor-scheduled` runs on a TrueForge **schedule**, unattended. Each
-run scans for idle resources (never running ones), writes a report with costs,
-then calls `execute_teardown`, which **pauses at the approval gate**. Nothing is
-deleted until you approve it. If a run finds nothing, it says so and stops.
-
-```bash
-python -m janitor_agent register        # registers both agents (idempotent)
-python -m janitor_agent schedule create --name idle-resources-daily --cron "0 9 * * *" --timezone Asia/Kolkata
-python -m janitor_agent schedule list                    # cron, status, last runs
-python -m janitor_agent schedule run-now                 # trigger a run immediately
-python -m janitor_agent schedule pause|resume|delete
-python -m janitor_agent pending                          # runs waiting for your approval
-python -m janitor_agent review [SESSION_ID]              # report + costs, then approve or deny
-```
-
-In Docker: `docker compose run --rm janitor schedule list`, `... janitor pending`,
-`... janitor review`.
-
-- **Approve where you like:** `review` (shows the run's report, then the same
-  cost panel and `Approve? [y/N]` prompt), or open the run in the TrueForge UI
-  (Sessions, marked "Scheduled run") and use its approval card.
-- **Cron:** standard 5 fields, evaluated in `--timezone`; the shortest interval is one
-  hour. Re-running `schedule create` with the same `--name` updates it.
-- **Server must be running:** TrueForge triggers schedules, so its containers
-  have to be up at the scheduled time.
-- **Unattended means strict:** the agent asks no questions, never retries a denied
-  teardown, and only deletes ids from its own scan of that run.
-- **Approval is per run:** a run that is never reviewed just stays paused; nothing
-  is deleted and the next run scans afresh.
-
 ## Cost estimates
 
 Costs come from the MCP server's price table (`../mcp-s2sep/PRICING.md`:
@@ -206,7 +172,6 @@ per request for the same strict behaviour.
 | `TRUEFORGE_BASE_URL` | `http://localhost:8791` | TrueForge API. The compose file maps container port 8790 to **host 8791**; use 8790 only if you run TrueForge from source (`pnpm dev`). |
 | `TRUEFORGE_TOKEN` | unset | Only when OIDC login is enabled. |
 | `FRESH_SESSION_PER_MESSAGE` | off | New session per message (see above). |
-| `SCHEDULE_TIMEZONE` | `UTC` | Default timezone for `schedule create`. |
 | `AGENT_MODEL` | `test/vm-polaris-openai` | Any model from `GET /api/v1/models`. |
 | `MCP_URL` | `http://host.docker.internal:8000/mcp` | The MCP server **as seen from the TrueForge container** (`localhost` there is the container itself). |
 | `MCP_AUTH_TOKEN` / `MCP_AUTH_TOKEN_FILE` | `../mcp-s2sep/.mcp_token` | Bearer token TrueForge presents to the MCP server. |

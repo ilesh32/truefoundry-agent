@@ -8,7 +8,7 @@ import sys
 
 from trueforge_sdk import McpServerHeaderAuth, RemoteMcpServerManifest
 
-from janitor_agent import config, scheduled_spec, spec
+from janitor_agent import config, spec
 
 
 def register_mcp_server(client) -> None:
@@ -24,17 +24,14 @@ def register_mcp_server(client) -> None:
     )
 
 
-def find_agent(client, name: str):
-    return next((a for a in client.agents.list(agent_name=name) if a.name == name), None)
-
-
-def register_agent(client, name: str = config.AGENT_NAME, description: str = spec.DESCRIPTION, manifest: dict | None = None) -> str:
-    manifest = manifest if manifest is not None else spec.manifest()
-    existing = find_agent(client, name)
+def register_agent(client) -> str:
+    existing = next((a for a in client.agents.list(agent_name=config.AGENT_NAME) if a.name == config.AGENT_NAME), None)
     if existing is not None:
-        client.agents.update(agent_id=existing.id, description=description, manifest=manifest)
+        client.agents.update(agent_id=existing.id, description=spec.DESCRIPTION, manifest=spec.manifest())
         return existing.id
-    return client.agents.create(name=name, description=description, manifest=manifest).data.id
+    return client.agents.create(
+        name=config.AGENT_NAME, description=spec.DESCRIPTION, manifest=spec.manifest()
+    ).data.id
 
 
 def main() -> None:
@@ -52,10 +49,6 @@ def main() -> None:
 
     agent_id = register_agent(client)
     print(f"registered agent {config.AGENT_NAME!r} (id {agent_id}), model {config.MODEL}")
-    scheduled_id = register_agent(
-        client, config.SCHEDULED_AGENT_NAME, scheduled_spec.DESCRIPTION, scheduled_spec.manifest()
-    )
-    print(f"registered agent {config.SCHEDULED_AGENT_NAME!r} (id {scheduled_id}) for scheduled runs")
     print(f"approval required for: {spec.APPROVAL_REQUIRED_TOOLS}")
 
 
